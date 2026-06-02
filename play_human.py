@@ -1,12 +1,17 @@
+import gymnasium as gym
+import numpy as np
 import pygame
 
-# from lander_env import PixelMoonLander
-from lander_env_v2 import PixelMoonLanderV2 as PixelMoonLander
+# from lander_env import PixelMoonLander as MoonLander
+# from lander_env_v2 import PixelMoonLanderV2 as MoonLander
+from lander_env_v3 import RadarMoonLanderV3 as MoonLander
+
+# from lander_env_mlp import MLPMoonLanderEnv as MoonLander
 
 
 def main():
     # Initialize the environment in human mode for visual feedback
-    env = PixelMoonLander(render_mode="human")
+    env = MoonLander(render_mode="human")
     obs, info = env.reset()
 
     print("========================================")
@@ -20,10 +25,10 @@ def main():
     print("  Q / ESC         : Quit")
     print("========================================")
 
+    is_continuous = isinstance(env.action_space, gym.spaces.Box)
+
     running = True
     while running:
-        action = 0  # Default: NOP (Do nothing)
-
         # Pygame Event Loop for Keyboard
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -36,12 +41,29 @@ def main():
 
         # Check held down keys for continuous thrust/rotation
         keys = pygame.key.get_pressed()
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
-            action = 1
-        elif keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            action = 2  # Rotate right
-        elif keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            action = 3  # Rotate left
+
+        if is_continuous:
+            # Action[0]: Main Engine (-1.0 to 1.0). > 0 is On.
+            # Action[1]: Rotation (-1.0 to 1.0). < -0.5 is Left, > 0.5 is Right.
+            m_power = -1.0
+            r_power = 0.0
+
+            if keys[pygame.K_w] or keys[pygame.K_UP]:
+                m_power = 1.0
+            if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+                r_power = -1.0
+            elif keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+                r_power = 1.0
+
+            action = np.array([m_power, r_power], dtype=np.float32)
+        else:
+            action = 0  # Default: NOP
+            if keys[pygame.K_w] or keys[pygame.K_UP]:
+                action = 1
+            elif keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+                action = 2  # Rotate right
+            elif keys[pygame.K_a] or keys[pygame.K_LEFT]:
+                action = 3  # Rotate left
 
         # Step the environment
         obs, reward, terminated, truncated, info = env.step(action)

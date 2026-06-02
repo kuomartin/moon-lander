@@ -1,8 +1,8 @@
 import math
 
+import cv2
 import gymnasium as gym
 import numpy as np
-import pygame
 from gymnasium import spaces
 
 
@@ -10,9 +10,10 @@ class PixelMoonLanderV2(gym.Env):
     """
     A Moon Lander environment with randomly generated terrain for CNN Reinforcement Learning.
     Observation space is an 84x84 grayscale pixel image.
+    This version uses OpenCV instead of Pygame for compatibility with Colab.
     """
 
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+    metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
 
     def __init__(
         self,
@@ -56,10 +57,7 @@ class PixelMoonLanderV2(gym.Env):
         self.rotation_speed = 0.1
         self.max_speed = 3.0
 
-        # Setup pygame for rendering and pixel extraction
-        self.screen = None
-        self.clock = None
-        self.scale = 5  # Scale for human mode (84 * 5 = 420x420)
+        self.reset()
 
     def _generate_terrain(self):
         self.terrain_x = [0]
@@ -69,13 +67,10 @@ class PixelMoonLanderV2(gym.Env):
 
         # Determine number of pads (2 to 4)
         num_pads = self.np_random.integers(2, 5)
-        # Pick random x-coordinates for pad centers, keeping them away from edges
-        # We need to make sure they are somewhat spaced out
         possible_centers = list(range(15, self.width - 15))
         self.np_random.shuffle(possible_centers)
         pad_centers = []
         for cx in possible_centers:
-            # Check distance to existing pads
             if all(abs(cx - existing_cx) > 15 for existing_cx in pad_centers):
                 pad_centers.append(cx)
             if len(pad_centers) == num_pads:
@@ -85,12 +80,10 @@ class PixelMoonLanderV2(gym.Env):
 
         current_x = 0
         for cx in pad_centers:
-            # Determine pad width - Increased to help agent find the target initially
             pad_w = self.np_random.integers(10, 20)
             px1 = cx - pad_w // 2
             px2 = cx + pad_w // 2
 
-            # Generate jagged points until the pad
             while current_x < px1 - 3:
                 step_x = self.np_random.integers(3, 8)
                 current_x = min(current_x + step_x, px1)
@@ -101,7 +94,6 @@ class PixelMoonLanderV2(gym.Env):
                 self.terrain_x.append(current_x)
                 self.terrain_y.append(current_y)
 
-            # Add the pad surface
             pad_y = self.terrain_y[-1] + self.np_random.integers(-10, 11)
             pad_y = np.clip(pad_y, 40, 72)
             self.terrain_x.append(px1)
@@ -109,7 +101,6 @@ class PixelMoonLanderV2(gym.Env):
             self.terrain_x.append(px2)
             self.terrain_y.append(pad_y)
 
-            # Determine score multiplier based on pad width
             if pad_w <= 7:
                 mult = 3
             elif pad_w <= 10:
@@ -122,7 +113,6 @@ class PixelMoonLanderV2(gym.Env):
             )
             current_x = px2
 
-        # Generate jagged points for the rest of the terrain
         while current_x < self.width:
             step_x = self.np_random.integers(3, 8)
             current_x += step_x
@@ -134,8 +124,6 @@ class PixelMoonLanderV2(gym.Env):
             self.terrain_y.append(current_y)
 
         self.terrain_x[-1] = self.width
-
-        # Interpolate to get heights for all integer x coordinates
         self.terrain_heights = np.interp(
             np.arange(self.width), self.terrain_x, self.terrain_y
         )
@@ -144,10 +132,7 @@ class PixelMoonLanderV2(gym.Env):
         super().reset(seed=seed)
 
         if self.map_pool_size is not None:
-            # Deterministically pick a map from the pool
             map_seed = self.base_seed + self.np_random.integers(0, self.map_pool_size)
-            # Use a temporary RNG to generate the terrain so it's consistent for that map seed
-            # but doesn't affect the episode's randomness (lander start position etc.)
             temp_rng = np.random.default_rng(map_seed)
             old_rng = self.np_random
             self.np_random = temp_rng
@@ -157,7 +142,6 @@ class PixelMoonLanderV2(gym.Env):
             self._generate_terrain()
             self.terrain_generated = True
 
-        # Initial Lander State (starts near the top center)
         self.x = self.width / 2.0
         self.y = self.height * 0.1
         self.vx = self.np_random.uniform(-0.5, 0.5)
@@ -165,21 +149,12 @@ class PixelMoonLanderV2(gym.Env):
         self.angle = self.np_random.uniform(-0.2, 0.2)
 
         self.done = False
-
-        # Flame visual states
         self.main_engine_on = False
-
         self.prev_shaping = self._calculate_shaping()
-
-        if self.render_mode == "human":
-            self._setup_pygame()
 
         return self._get_obs(), {}
 
     def _calculate_shaping(self):
-        # Calculate distance to pads, weighting them by their multiplier
-        # This encourages the agent to move toward higher-value targets
-        # but doesn't lock it to a single one.
         potential_rewards = []
         for pad in self.pads:
             target_x = (pad["x1"] + pad["x2"]) / 2.0
@@ -187,9 +162,6 @@ class PixelMoonLanderV2(gym.Env):
             dx = (self.x - target_x) / (self.width / 2.0)
             dy = (self.y - target_y) / self.height
             dist = math.sqrt(dx**2 + dy**2)
-
-            # Shaping value: closer is better, and higher mult is slightly better
-            # We add a small bonus for higher multipliers to the base -100 distance penalty
             shaping_val = -100.0 * dist + (pad["mult"] - 1) * 10.0
             potential_rewards.append(shaping_val)
 
@@ -197,86 +169,49 @@ class PixelMoonLanderV2(gym.Env):
             return max(potential_rewards)
         return 0.0
 
-    def _setup_pygame(self):
-        if self.screen is None:
-            pygame.init()
-            pygame.font.init()
-            if self.render_mode == "human":
-                pygame.display.init()
-                self.screen = pygame.display.set_mode(
-                    (self.width * self.scale, self.height * self.scale)
-                )
-                pygame.display.set_caption("Pixel Moon Lander V2")
-            else:
-                self.screen = pygame.Surface((self.width, self.height))
-        if self.clock is None:
-            self.clock = pygame.time.Clock()
-
     def step(self, action):
         if self.done:
             return self._get_obs(), 0, True, False, {}
 
         self.main_engine_on = False
-
-        # Apply action
         if action == 1:
-            # Main engine
             self.vx += math.sin(self.angle) * self.thrust
             self.vy -= math.cos(self.angle) * self.thrust
             self.main_engine_on = True
         elif action == 2:
-            # Rotate right
             self.angle += self.rotation_speed
         elif action == 3:
-            # Rotate left
             self.angle -= self.rotation_speed
 
-        # Apply gravity
         self.vy += self.gravity
-
-        # Clip velocity
         self.vx = np.clip(self.vx, -self.max_speed, self.max_speed)
         self.vy = np.clip(self.vy, -self.max_speed, self.max_speed)
-
-        # Update position
         self.x += self.vx
         self.y += self.vy
 
-        # 1. Calculate current shaping value
         shaping = self._calculate_shaping()
-
-        # 2. Reward = difference in shaping
-        # 放大距離縮減的獎勵，讓它更有動力靠近
         reward = (shaping - self.prev_shaping) * 2.0
         self.prev_shaping = shaping
 
-        # 追加引導：如果垂直速度太快(往下掉)，給予微小懲罰
         if self.vy > 1.0:
             reward -= 0.1
-
-        # 追加引導：如果不在降落台上，且成功保持懸浮/緩降，給予微小獎勵 (鼓勵存活)
         if 0 < self.vy < 0.5:
             reward += 0.05
 
-        # 3. Fuel penalty (Reduced to encourage exploration and movement)
         if action == 1:
-            reward -= 0.05  # Reduced from 0.1
+            reward -= 0.05
         elif action in [2, 3]:
-            reward -= 0.01  # Reduced from 0.02
+            reward -= 0.01
 
         terminated = False
-
-        # Collision bounding box for lander
         lander_bottom = self.y + 2
         lander_left = self.x - 2
         lander_right = self.x + 2
 
-        # Check out of bounds
         if self.x < 0 or self.x >= self.width or self.y < 0:
             reward += -100
             terminated = True
         else:
-            # Check terrain collision at left, center, right
             tx_left = np.clip(int(lander_left), 0, self.width - 1)
             tx_center = np.clip(int(self.x), 0, self.width - 1)
             tx_right = np.clip(int(lander_right), 0, self.width - 1)
@@ -286,193 +221,107 @@ class PixelMoonLanderV2(gym.Env):
                 or lander_bottom >= self.terrain_heights[tx_left]
                 or lander_bottom >= self.terrain_heights[tx_right]
             ):
-                # Check if landed on a pad
                 landed_on_pad = None
                 for pad in self.pads:
-                    # Lander must be fully inside the pad's horizontal bounds
                     if pad["x1"] <= lander_left and lander_right <= pad["x2"]:
-                        # Vertical check: lander bottom should be roughly at pad height
                         if abs(lander_bottom - pad["y"]) <= 5:
                             landed_on_pad = pad
                             break
 
                 if landed_on_pad is not None:
                     if abs(self.vy) < 1.0 and abs(self.angle) < 0.3:
-                        reward += (
-                            500 * landed_on_pad["mult"]
-                        )  # 完美降落 (從 200 提升到 500)
+                        reward += 500 * landed_on_pad["mult"]
                     elif self.tolerance_mode:
-                        # 寬容模式：根據誤差給予部分獎勵
                         speed_err = max(0, abs(self.vy) - 1.0)
                         angle_err = max(0, abs(self.angle) - 0.3)
-
-                        # 根據傳入的比例扣分
                         land_reward = (
-                            (250 * landed_on_pad["mult"])  # 寬容模式基準也提升
+                            (250 * landed_on_pad["mult"])
                             - (speed_err * self.speed_tolerance_penalty)
                             - (angle_err * self.angle_tolerance_penalty)
                         )
                         reward += max(-20, land_reward)
                     else:
-                        reward += -100  # 關閉寬容模式時，非完美即墜毀
+                        reward += -100
                 else:
-                    reward += -100  # 撞到崎嶇地形或沒對準平台
+                    reward += -100
                 terminated = True
 
         self.done = terminated
-
-        if self.render_mode == "human":
-            self.render()
-
         return self._get_obs(), reward, terminated, False, {}
 
     def _get_obs(self):
-        """Render the 84x84 image and return as numpy array"""
-        surface = pygame.Surface((self.width, self.height))
-        surface.fill((0, 0, 0))  # Black space
+        """Render the 84x84 image and return as numpy array using OpenCV"""
+        img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
-        # Create polygon points for terrain
+        # Terrain
         terrain_poly = [(tx, ty) for tx, ty in zip(self.terrain_x, self.terrain_y)]
         terrain_poly.append((self.width, self.height))
         terrain_poly.append((0, self.height))
+        pts = np.array(terrain_poly, np.int32).reshape((-1, 1, 2))
+        cv2.fillPoly(img, [pts], (60, 60, 60))
 
-        # Draw Terrain (Dark Gray)
-        pygame.draw.polygon(surface, (60, 60, 60), terrain_poly)
-
-        # Draw Landing Pads (Maximum contrast in grayscale)
+        # Pads
         for pad in self.pads:
             if pad["mult"] == 3:
-                color = (255, 255, 255)  # White (Brightness 255)
+                color = (255, 255, 255)  # White
             elif pad["mult"] == 2:
                 color = (200, 200, 200)  # Light Gray
             else:
                 color = (140, 140, 140)  # Mid Gray
-
-            pygame.draw.line(
-                surface,
+            cv2.line(
+                img,
+                (int(pad["x1"]), int(pad["y"])),
+                (int(pad["x2"]), int(pad["y"])),
                 color,
-                (pad["x1"], pad["y"]),
-                (pad["x2"], pad["y"]),
-                2,  # Thicker for CNN perception
+                2,
             )
 
-        # Draw Lander
-        self._draw_lander(
-            surface, self.x, self.y, self.angle, scale=2.0
-        )  # Larger for CNN visibility
+        # Lander
+        self._draw_lander(img, self.x, self.y, self.angle, scale=2.0)
 
-        # Convert to numpy array (H, W, C)
-        view = pygame.surfarray.pixels3d(surface)
-        view = view.transpose([1, 0, 2])
-
-        # Convert RGB to Grayscale using standard luminosity weights
-        gray = np.dot(view[..., :3], [0.2989, 0.5870, 0.1140])
+        # Grayscale conversion using OpenCV
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         gray = np.expand_dims(gray, axis=-1).astype(np.uint8)
-
         return gray
 
-    def _draw_lander(self, surface, x, y, angle, scale=1):
-        # Rocket shape: 5 points (Pentagon)
+    def _draw_lander(self, img, x, y, angle, scale=1.0):
         s = scale
-        # Relative points (Tip, Right Shoulder, Right Bottom, Left Bottom, Left Shoulder)
         points = [
-            (0, -3 * s),  # Tip (Head)
-            (1.2 * s, -0.5 * s),  # Right Shoulder
-            (1.2 * s, 2.5 * s),  # Right Bottom
-            (-1.2 * s, 2.5 * s),  # Left Bottom
-            (-1.2 * s, -0.5 * s),  # Left Shoulder
+            (0, -3 * s),
+            (1.2 * s, -0.5 * s),
+            (1.2 * s, 2.5 * s),
+            (-1.2 * s, 2.5 * s),
+            (-1.2 * s, -0.5 * s),
         ]
-
-        # Rotate and translate
         rotated_points = []
         for px, py in points:
             rx = px * math.cos(angle) - py * math.sin(angle)
             ry = px * math.sin(angle) + py * math.cos(angle)
-            rotated_points.append((x + rx, y + ry))
+            rotated_points.append((int(x + rx), int(y + ry)))
 
-        # Draw main body (Pure Black for maximum contrast)
-        pygame.draw.polygon(surface, (0, 0, 0), rotated_points)
+        pts = np.array(rotated_points, np.int32).reshape((-1, 1, 2))
+        cv2.fillPoly(img, [pts], (0, 0, 0))
 
-        # Draw Nose Cone (Pure White for maximum brightness in grayscale)
+        # Nose cone (White for orientation)
         nose_points = [rotated_points[0], rotated_points[1], rotated_points[4]]
-        pygame.draw.polygon(surface, (255, 255, 255), nose_points)
+        nose_pts = np.array(nose_points, np.int32).reshape((-1, 1, 2))
+        cv2.fillPoly(img, [nose_pts], (255, 255, 255))
 
-        # Draw Flame
+        # Flame
         if self.main_engine_on:
-            # Flame starts from the elongated bottom
             flame_points = [(-0.8 * s, 2.5 * s), (0.8 * s, 2.5 * s), (0, 5.0 * s)]
             rotated_flame = []
             for px, py in flame_points:
                 rx = px * math.cos(angle) - py * math.sin(angle)
                 ry = px * math.sin(angle) + py * math.cos(angle)
-                rotated_flame.append((x + rx, y + ry))
-            pygame.draw.polygon(surface, (255, 150, 0), rotated_flame)
+                rotated_flame.append((int(x + rx), int(y + ry)))
+            flame_pts = np.array(rotated_flame, np.int32).reshape((-1, 1, 2))
+            cv2.fillPoly(img, [flame_pts], (0, 165, 255))
 
     def render(self):
-        if self.render_mode is None:
-            return
-
-        if self.screen is None:
-            self._setup_pygame()
-
-        if self.render_mode == "human":
-            self.screen.fill((0, 0, 0))
-
-            # Scaled drawing for human visibility
-            scaled_terrain_poly = [
-                (tx * self.scale, ty * self.scale)
-                for tx, ty in zip(self.terrain_x, self.terrain_y)
-            ]
-            scaled_terrain_poly.append(
-                (self.width * self.scale, self.height * self.scale)
-            )
-            scaled_terrain_poly.append((0, self.height * self.scale))
-
-            # Terrain
-            pygame.draw.polygon(self.screen, (100, 100, 100), scaled_terrain_poly)
-
-            # Pads and multipliers
-            font = pygame.font.SysFont(None, 8 * self.scale)
-            for pad in self.pads:
-                if pad["mult"] == 3:
-                    color = (0, 255, 0)  # Green
-                elif pad["mult"] == 2:
-                    color = (255, 255, 0)  # Yellow
-                else:
-                    color = (255, 255, 255)  # White
-
-                # Draw thick pad
-                pygame.draw.line(
-                    self.screen,
-                    color,
-                    (pad["x1"] * self.scale, pad["y"] * self.scale),
-                    (pad["x2"] * self.scale, pad["y"] * self.scale),
-                    max(3, self.scale),  # Thicker line
-                )
-
-                # Render multiplier text
-                text = font.render(f"x{pad['mult']}", True, color)
-                text_rect = text.get_rect(
-                    center=(
-                        ((pad["x1"] + pad["x2"]) / 2) * self.scale,
-                        (pad["y"] + 6) * self.scale,
-                    )
-                )
-                self.screen.blit(text, text_rect)
-
-            # Lander
-            self._draw_lander(
-                self.screen,
-                self.x * self.scale,
-                self.y * self.scale,
-                self.angle,
-                scale=self.scale,
-            )
-
-            pygame.display.flip()
-            self.clock.tick(self.metadata["render_fps"])
+        if self.render_mode == "rgb_array":
+            return self._get_obs()
+        return None
 
     def close(self):
-        if self.screen is not None:
-            pygame.quit()
-            self.screen = None
+        pass
