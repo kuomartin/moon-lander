@@ -1,6 +1,4 @@
 import argparse
-import os
-import time
 
 from gymnasium.envs.registration import register
 from stable_baselines3 import PPO
@@ -24,6 +22,7 @@ def train(
     map_pool_size,
     speed_tolerance,
     angle_tolerance,
+    render_fps,
 ):
     print(
         f"Creating Radar environment (Seed: {seed}, Rays: {num_rays}, Pool: {map_pool_size})..."
@@ -37,60 +36,57 @@ def train(
         "map_pool_size": map_pool_size,
         "speed_tolerance": speed_tolerance,
         "angle_tolerance": angle_tolerance,
+        "render_fps": render_fps,
     }
 
     # Detect CPU cores to set n_envs appropriately
+    # --- Consistency Strategy ---
+    # 1. Fix the total number of steps collected before each update
+    # Total rollout size = n_envs * n_steps. We want this to be constant (e.g., 2048)
+    target_total_rollout = 16384
+
     import multiprocessing
 
     cpu_cores = multiprocessing.cpu_count()
-    # Usually 2 * cpu_cores is a good balance for simple environments
-    n_envs = max(cpu_cores, 2)
-    print(f"Detected {cpu_cores} CPU cores, using n_envs={n_envs}")
+    n_envs = max(min(cpu_cores, 8), 2)  # Range between 2 and 8
 
-    # MLP usually trains well with multiple environments
+    # Adjust n_steps so that n_envs * n_steps is always close to target_total_rollout
+    n_steps = target_total_rollout // n_envs
+
+    # 2. Fix training hyperparams (Use stable defaults that work on both)
+    batch_size = 64
+    n_epochs = 10
+    learning_rate = 3e-4
+
+    print(
+        f"Consistency Mode: n_envs={n_envs}, n_steps={n_steps} (Total: {n_envs * n_steps}), batch_size={batch_size}"
+    )
+
     env = make_vec_env("RadarMoonLander-v0", n_envs=n_envs, env_kwargs=env_kwargs)
 
     import torch
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # Optimized hyperparams for GPU vs CPU
-    if device == "cuda":
-        batch_size = 256
-        n_epochs = 4
-        learning_rate = 5e-4
-    else:
-        batch_size = 64
-        n_epochs = 10
-        learning_rate = 3e-4
-
-    print(
-        f"Using device: {device}, batch_size: {batch_size}, n_epochs: {n_epochs}, lr: {learning_rate}"
-    )
 
     if resume:
-        print(f"Loading existing model from {model_path} to resume training...")
-        try:
-            model = PPO.load(
-                model_path,
-                env=env,
-                tensorboard_log="./tensorboard/",
-                device=device,
-                # Standard MLP hyperparams
-                learning_rate=learning_rate,
-                n_steps=2048,
-                batch_size=batch_size,
-                n_epochs=n_epochs,
-                gamma=0.99,
-                gae_lambda=0.95,
-                clip_range=0.2,
-                ent_coef=0.01,
-            )
-        except Exception as e:
-            print(f"Error loading model to resume: {e}")
-            resume = False
-
+        print(f"Loading existing model from {model_path}...")
+        model = PPO.load(
+            model_path,
+            env=env,
+            tensorboard_log="./tensorboard/",
+            device=device,
+            learning_rate=learning_rate,
+            n_steps=n_steps,
+            batch_size=batch_size,
+            n_epochs=n_epochs,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            ent_coef=0.01,
+            seed=seed,
+        )
     else:
-        print(f"Initializing new PPO agent with MlpPolicy on {device}...")
+        print(f"Initializing new PPO on {device} (Seed: {seed})...")
         model = PPO(
             "MlpPolicy",
             env,
@@ -98,13 +94,14 @@ def train(
             tensorboard_log="./tensorboard/",
             device=device,
             learning_rate=learning_rate,
-            n_steps=2048,
+            n_steps=n_steps,
             batch_size=batch_size,
             n_epochs=n_epochs,
             gamma=0.99,
             gae_lambda=0.95,
             clip_range=0.2,
             ent_coef=0.01,
+            seed=seed,
         )
 
     print(f"Starting training for {timesteps} timesteps...")
@@ -143,6 +140,7 @@ def test(
     map_pool_size,
     speed_tolerance,
     angle_tolerance,
+    render_fps,
 ):
     import pygame
 
@@ -162,6 +160,7 @@ def test(
         "map_pool_size": map_pool_size,
         "speed_tolerance": speed_tolerance,
         "angle_tolerance": angle_tolerance,
+        "render_fps": render_fps,
     }
     env = make_vec_env("RadarMoonLander-v0", n_envs=1, env_kwargs=env_kwargs)
 
@@ -196,7 +195,6 @@ def test(
 
             action, _states = model.predict(obs, deterministic=True)
             obs, rewards, dones, infos = env.step(action)
-            env.render()
             if dones[0]:
                 print(f"Episode Finished. Reward: {rewards[0]:.2f}")
     except KeyboardInterrupt:
@@ -218,6 +216,9 @@ if __name__ == "__main__":
     parser.add_argument("--map-pool-size", type=int, default=None)
     parser.add_argument("--speed-tolerance", type=float, default=0)
     parser.add_argument("--angle-tolerance", type=float, default=0)
+    parser.add_argument(
+        "--fps", type=int, default=30, help="Frames per second for rendering"
+    )
     args = parser.parse_args()
 
     if args.test:
@@ -228,6 +229,7 @@ if __name__ == "__main__":
             args.map_pool_size,
             args.speed_tolerance,
             args.angle_tolerance,
+            args.fps,
         )
     else:
         train(
@@ -239,4 +241,5 @@ if __name__ == "__main__":
             args.map_pool_size,
             args.speed_tolerance,
             args.angle_tolerance,
+            args.fps,
         )

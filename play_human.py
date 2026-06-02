@@ -8,9 +8,9 @@ from lander_env import WIDTH
 from lander_env import RadarMoonLander as MoonLander
 
 
-def main(num_rays=20, auto_stabilize=False):
+def main(num_rays, auto_stabilize, render_fps):
     # Initialize the environment in human mode for visual feedback
-    env = MoonLander(render_mode="human", num_rays=num_rays)
+    env = MoonLander(render_mode="human", num_rays=num_rays, render_fps=render_fps)
     obs, info = env.reset()
 
     print("========================================")
@@ -130,6 +130,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable auto-stabilization by default",
     )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=30,
+        help="Frames per second (default: 30)",
+    )
     args = parser.parse_args()
 
-    main(num_rays=args.num_rays, auto_stabilize=args.auto_stabilize)
+    main(
+        num_rays=args.num_rays, auto_stabilize=args.auto_stabilize, render_fps=args.fps
+    )

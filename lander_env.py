@@ -39,7 +39,7 @@ class RadarMoonLander(gym.Env):
     - Index 1: Rotation (-1.0 to -0.5: Left 100%-0%, -0.5 to 0.5: NOP, 0.5 to 1.0: Right 0%-100%)
     """
 
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
     def __init__(
         self,
@@ -50,8 +50,13 @@ class RadarMoonLander(gym.Env):
         base_seed=0,
         speed_tolerance=0.0,
         angle_tolerance=0.0,
+        render_fps=60,
     ):
         super().__init__()
+        # Copy class metadata to instance so we can modify render_fps independently
+        self.metadata = self.metadata.copy()
+        self.metadata["render_fps"] = render_fps
+
         self.render_mode = render_mode
         self.num_rays = num_rays
         self.fixed_map = fixed_map
