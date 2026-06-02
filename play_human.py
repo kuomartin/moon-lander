@@ -2,11 +2,7 @@ import gymnasium as gym
 import numpy as np
 import pygame
 
-# from lander_env import PixelMoonLander as MoonLander
-# from lander_env_v2 import PixelMoonLanderV2 as MoonLander
 from lander_env_v3 import RadarMoonLanderV3 as MoonLander
-
-# from lander_env_mlp import MLPMoonLanderEnv as MoonLander
 
 
 def main():
