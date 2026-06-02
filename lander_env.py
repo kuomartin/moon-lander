@@ -86,63 +86,76 @@ class RadarMoonLander(gym.Env):
 
     def _generate_terrain(self):
         self.terrain_x = [_ZERO]
-        self.terrain_y = [self.np_random.integers(42, 80)]
+        # 增加初始高度的隨機範圍，使地形更多樣
+        self.terrain_y = [self.np_random.integers(40, 75)]
         self.pads = []
 
-        num_pads = self.np_random.integers(2, 5)
-        possible_centers = list(range(15, WIDTH - 15))
+        # 固定不同數量平台時的分數分配，確保每場的得分機會更平均，不會有些場次太多高分
+        num_pads = self.np_random.integers(2, 5)  # 2, 3, or 4
+        if num_pads == 2:
+            multipliers = [self.np_random.choice([1, 2]), 3]
+        elif num_pads == 3:
+            multipliers = [1, 2, 3]
+        else:  # 4
+            multipliers = [1, 1, 2, 3]
+        self.np_random.shuffle(multipliers)
+
+        # 固定倍率對應的平台寬度
+        # 3倍(綠): 6, 2倍(黃): 10, 1倍(白): 18
+        mult_to_width = {3: 6, 2: 10, 1: 18}
+
+        # 尋找不重疊的平台中心點，並留出邊界空間
+        possible_centers = list(range(10, WIDTH - 10))
         self.np_random.shuffle(possible_centers)
         pad_centers: list[int] = []
         for cx in possible_centers:
-            if all(abs(cx - existing_cx) > 15 for existing_cx in pad_centers):
+            # 確保平台之間有足夠間隔，考慮到最大寬度 18 與緩衝
+            if all(abs(cx - existing_cx) > 18 for existing_cx in pad_centers):
                 pad_centers.append(cx)
             if len(pad_centers) == num_pads:
                 break
         pad_centers.sort()
 
         current_x = 0
-        for cx in pad_centers:
-            # 調整平台的寬度範圍，使其有機會小於或等於 7 藉此產生 3 倍(綠色)的平台
-            pad_w = self.np_random.integers(6, 20)
+        for i, cx in enumerate(pad_centers):
+            mult = multipliers[i]
+            pad_w = mult_to_width[mult]
             px1 = cx - pad_w // 2
-            px2 = cx + pad_w // 2
+            px2 = px1 + pad_w
 
-            while current_x < px1 - 3:
-                step_x = self.np_random.integers(3, 8)
+            # 生成平台之前的隨機地形
+            while current_x < px1 - 2:
+                # 較小的步長可以產生更細緻的地形細節
+                step_x = self.np_random.integers(2, 6)
                 current_x = min(current_x + step_x, px1)
                 if current_x == px1:
                     break
-                current_y = self.terrain_y[-1] + self.np_random.integers(-15, 16)
-                current_y = np.clip(current_y, 42, 80)
+                # 增加垂直起伏的隨機性，擴大高度範圍
+                dy = self.np_random.integers(-12, 13)
+                current_y = np.clip(self.terrain_y[-1] + dy, 35, 80)
                 self.terrain_x.append(current_x)
                 self.terrain_y.append(current_y)
 
-            pad_y = self.terrain_y[-1] + self.np_random.integers(-10, 11)
-            pad_y = np.clip(pad_y, 42, 72)
+            # 設定平台的高度（保持水平），增加垂直落差的驚喜感
+            pad_y = self.np_random.integers(40, 75)
             self.terrain_x.append(px1)
             self.terrain_y.append(pad_y)
             self.terrain_x.append(px2)
             self.terrain_y.append(pad_y)
-
-            if pad_w <= 7:
-                mult = 3
-            elif pad_w <= 10:
-                mult = 2
-            else:
-                mult = 1
 
             self.pads.append(
                 {"x1": px1, "x2": px2, "y": pad_y, "mult": mult, "width": pad_w}
             )
             current_x = px2
 
+        # 生成最後一段地形直到邊界
         while current_x < WIDTH:
-            step_x = self.np_random.integers(3, 8)
+            step_x = self.np_random.integers(2, 6)
             current_x += step_x
             if current_x > WIDTH:
                 current_x = _WIDTH
-            current_y = self.terrain_y[-1] + self.np_random.integers(-15, 16)
-            current_y = np.clip(current_y, 42, 80)
+            dy = self.np_random.integers(-12, 13)
+            current_y = np.clip(self.terrain_y[-1] + dy, 35, 80)
             self.terrain_x.append(current_x)
             self.terrain_y.append(current_y)
 
@@ -276,12 +289,14 @@ class RadarMoonLander(gym.Env):
             reward -= 10.0
 
         terminated = False
+        outcome = 0
         lander_bottom = self.y + 2
         lander_left = self.x - 2
         lander_right = self.x + 2
 
         if self.x < 0 or self.x >= WIDTH or self.y < 0 or self.y >= HEIGHT:
             reward += -100
+            outcome = -1
             terminated = True
         else:
             tx_left = np.clip(int(lander_left), 0, WIDTH - 1)
@@ -303,8 +318,10 @@ class RadarMoonLander(gym.Env):
                 if landed_on_pad is not None:
                     if abs(self.vy) < 1.0 and abs(self.angle) < 0.3:
                         reward += 100 * landed_on_pad["mult"]
+                        outcome = landed_on_pad["mult"]
                     else:
                         reward += -100
+                        outcome = -1
                         if self.speed_tolerance > 0:
                             bound = LANDING_SPEED * self.speed_tolerance
                             tolerance = 50 * (2 - abs(self.vy) / bound)
@@ -315,13 +332,20 @@ class RadarMoonLander(gym.Env):
                             reward += max(tolerance, 0)
                 else:
                     reward += -100
+                    outcome = -1
                 terminated = True
 
         self.done = terminated
+
+        info = {}
+        if terminated:
+            info["outcome"] = outcome
+            info["is_success"] = outcome > 0
+
         if self.render_mode == "human":
             self.render()
 
-        return self._get_obs(), reward, terminated, False, {}
+        return self._get_obs(), reward, terminated, False, info
 
     def _get_obs(self):
         # 1. Prepare all ray angles (Vectorized)
