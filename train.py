@@ -144,6 +144,10 @@ def test(
     speed_tolerance,
     angle_tolerance,
 ):
+    import pygame
+
+    from lander_env import WIDTH
+
     print(f"Loading model {model_path} for testing...")
     try:
         model = PPO.load(model_path)
@@ -163,9 +167,36 @@ def test(
 
     obs = env.reset()
     try:
-        while True:
+        running = True
+        while running:
+            # Handle pygame events for window manipulation
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_q or event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif event.key in (
+                        pygame.K_PLUS,
+                        pygame.K_EQUALS,
+                        pygame.K_KP_PLUS,
+                    ):
+                        # Extract the actual environment from DummyVecEnv to set its scale
+                        base_env = env.envs[0].unwrapped
+                        base_env.scale = min(20, base_env.scale + 1)
+                        base_env.screen = pygame.display.set_mode(
+                            (int(WIDTH * base_env.scale), int(WIDTH * base_env.scale))
+                        )
+                    elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+                        base_env = env.envs[0].unwrapped
+                        base_env.scale = max(1, base_env.scale - 1)
+                        base_env.screen = pygame.display.set_mode(
+                            (int(WIDTH * base_env.scale), int(WIDTH * base_env.scale))
+                        )
+
             action, _states = model.predict(obs, deterministic=True)
             obs, rewards, dones, infos = env.step(action)
+            env.render()
             if dones[0]:
                 print(f"Episode Finished. Reward: {rewards[0]:.2f}")
     except KeyboardInterrupt:

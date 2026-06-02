@@ -499,7 +499,7 @@ class RadarMoonLander(gym.Env):
                     color,
                     (pad["x1"] * self.scale, pad["y"] * self.scale),
                     (pad["x2"] * self.scale, pad["y"] * self.scale),
-                    max(3, self.scale),
+                    int(max(3, self.scale)),
                 )
 
             if hasattr(self, "last_rays"):
