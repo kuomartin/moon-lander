@@ -3,3 +3,4 @@ __pycache__/
 # colab/
 *_tensorboard/
 venv/
+model_checkpoints/

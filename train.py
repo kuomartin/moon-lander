@@ -1,7 +1,10 @@
 import argparse
+import os
+import time
 
 from gymnasium.envs.registration import register
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 
@@ -78,8 +81,19 @@ def train(
         )
 
     print(f"Starting training for {timesteps} timesteps...")
+
+    # 每訓練約 25,000 步 (除以 8 個並行環境) 就自動儲存一次 checkpoint
+    checkpoint_callback = CheckpointCallback(
+        save_freq=max(25_000 // 8, 1),
+        save_path="./model_checkpoints/",
+        name_prefix="ppo_radar",
+    )
+
     model.learn(
-        total_timesteps=timesteps, progress_bar=True, reset_num_timesteps=not resume
+        total_timesteps=timesteps,
+        progress_bar=True,
+        reset_num_timesteps=not resume,
+        callback=checkpoint_callback,
     )
 
     model.save(model_path)
