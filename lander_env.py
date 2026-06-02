@@ -177,16 +177,22 @@ class RadarMoonLander(gym.Env):
         return self._get_obs(), {}
 
     def _calculate_shaping(self):
-        potential_rewards = []
-        for pad in self.pads:
-            target_x = (pad["x1"] + pad["x2"]) / 2.0
-            target_y = pad["y"]
-            dx = (self.x - target_x) / (WIDTH / 2.0)
-            dy = (self.y - target_y) / HEIGHT
-            dist = math.sqrt(dx**2 + dy**2)
-            shaping_val = -50.0 * dist + (pad["mult"] - 1) * 10.0
-            potential_rewards.append(shaping_val)
-        return max(potential_rewards) if potential_rewards else 0.0
+        if not self.pads:
+            return 0.0
+
+        # Vectorized shaping calculation
+        pads_x1 = np.array([p["x1"] for p in self.pads])
+        pads_x2 = np.array([p["x2"] for p in self.pads])
+        pads_y = np.array([p["y"] for p in self.pads])
+        pads_mult = np.array([p["mult"] for p in self.pads])
+
+        target_x = (pads_x1 + pads_x2) / 2.0
+        dx = (self.x - target_x) / (WIDTH / 2.0)
+        dy = (self.y - pads_y) / HEIGHT
+        dists = np.sqrt(dx**2 + dy**2)
+
+        shaping_vals = -50.0 * dists + (pads_mult - 1) * 10.0
+        return float(np.max(shaping_vals))
 
     def _setup_pygame(self):
         if self.screen is None:
@@ -313,32 +319,89 @@ class RadarMoonLander(gym.Env):
         return self._get_obs(), reward, terminated, False, {}
 
     def _get_obs(self):
-        # Radar rays
-        rays = []
+        # 1. Prepare all ray angles (Vectorized)
+        if self.num_rays > 1:
+            angle_offsets = np.linspace(np.pi / 2, 3 * np.pi / 2, self.num_rays)
+        else:
+            angle_offsets = np.array([np.pi])
+
+        angles = self.angle + angle_offsets
+
+        # 2. Vectorized scanning for all distances
+        max_dist = 100.0
+        step_size = 1.0
+        # Sample points from step_size to max_dist
+        steps = np.arange(
+            step_size, max_dist + step_size, step_size
+        )  # [1, 2, ..., 100]
+
+        # Create matrices: rays (N) x steps (M)
+        # angles[:, None] is (N, 1), steps[None, :] is (1, M)
+        dists_matrix = steps[None, :]
+        angles_matrix = angles[:, None]
+
+        dx = dists_matrix * np.sin(angles_matrix)
+        dy = -dists_matrix * np.cos(angles_matrix)
+
+        sample_x = self.x + dx
+        sample_y = self.y + dy
+
+        # 3. Check boundary and terrain collisions (Vectorized)
+        idx_x = sample_x.astype(int)
+
+        # Boundary mask
+        out_of_bounds = (
+            (sample_x < 0) | (sample_x >= WIDTH) | (sample_y < 0) | (sample_y >= HEIGHT)
+        )
+
+        # Terrain check (clip indices to safe range for lookup)
+        safe_idx_x = np.clip(idx_x, 0, WIDTH - 1)
+        hit_terrain = sample_y >= self.terrain_heights[safe_idx_x]
+
+        # Combined collision points
+        hits = out_of_bounds | hit_terrain
+
+        # 4. Find the first hit index for each ray
+        # argmax returns the first index where True occurs.
+        # If no True is found, it returns 0, so we check hit_any.
+        hit_any = np.any(hits, axis=1)
+        first_hit_idx = np.argmax(hits, axis=1)
+
+        # 5. Determine final distances and types
+        final_dists = np.full(self.num_rays, max_dist, dtype=np.float32)
+        final_types = np.zeros(self.num_rays, dtype=np.float32)
+
         self.last_rays = []
-        # Cast rays in a semi-circle (lower half) around the lander
         for i in range(self.num_rays):
-            # Start from right (pi/2) to left (3pi/2) to cover the lower half
-            # We use (self.num_rays - 1) to ensure the first and last rays are exactly horizontal if num_rays > 1
-            if self.num_rays > 1:
-                angle_offset = math.pi / 2 + i * (math.pi / (self.num_rays - 1))
-            else:
-                angle_offset = math.pi  # If only 1 ray, point it straight down
-            angle = self.angle + angle_offset
-            dist, rtype = self._cast_ray(self.x, self.y, angle)
-            self.last_rays.append((angle, dist, rtype))
-            rays.append(dist / 100.0)  # Normalize distance
+            if hit_any[i]:
+                idx = first_hit_idx[i]
+                dist = steps[idx]
+                hx, hy = sample_x[i, idx], sample_y[i, idx]
 
-            if rtype == -1:
-                norm_type = -1.0
-            elif rtype == 0:
-                norm_type = 0.0
-            else:
-                norm_type = rtype / 3.0
-            rays.append(norm_type)
+                # Identify hit type (Pad vs Terrain/Boundary)
+                rtype = -1.0  # Default: Terrain/Boundary
+                if not out_of_bounds[i, idx]:
+                    for pad in self.pads:
+                        if pad["x1"] <= hx <= pad["x2"] and abs(hy - pad["y"]) < 2:
+                            rtype = float(pad["mult"])
+                            break
 
-        # Other states
-        obs = rays + [
+                final_dists[i] = dist
+                final_types[i] = rtype
+
+            # Store for rendering
+            self.last_rays.append((angles[i], final_dists[i], final_types[i]))
+
+        # 6. Assemble Observation
+        normalized_dists = final_dists / 100.0
+        normalized_types = np.where(final_types == -1.0, -1.0, final_types / 3.0)
+
+        # Interleave distances and types: [d1, t1, d2, t2, ...]
+        rays_obs = np.empty(self.num_rays * 2, dtype=np.float32)
+        rays_obs[0::2] = normalized_dists
+        rays_obs[1::2] = normalized_types
+
+        other_states = [
             self.x / WIDTH,
             self.y / HEIGHT,
             self.vx / MAX_VELOCITY,
@@ -348,7 +411,9 @@ class RadarMoonLander(gym.Env):
             math.sin(self.angle),
             math.cos(self.angle),
         ]
-        return np.array(obs, dtype=np.float32)
+
+        obs = np.concatenate([rays_obs, np.array(other_states, dtype=np.float32)])
+        return obs
 
     def _cast_ray(self, start_x, start_y, angle, max_dist=100):
         step = 1.0

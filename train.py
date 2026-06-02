@@ -39,8 +39,33 @@ def train(
         "angle_tolerance": angle_tolerance,
     }
 
+    # Detect CPU cores to set n_envs appropriately
+    import multiprocessing
+
+    cpu_cores = multiprocessing.cpu_count()
+    # Usually 2 * cpu_cores is a good balance for simple environments
+    n_envs = max(cpu_cores, 2)
+    print(f"Detected {cpu_cores} CPU cores, using n_envs={n_envs}")
+
     # MLP usually trains well with multiple environments
-    env = make_vec_env("RadarMoonLander-v0", n_envs=8, env_kwargs=env_kwargs)
+    env = make_vec_env("RadarMoonLander-v0", n_envs=n_envs, env_kwargs=env_kwargs)
+
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Optimized hyperparams for GPU vs CPU
+    if device == "cuda":
+        batch_size = 256
+        n_epochs = 4
+        learning_rate = 5e-4
+    else:
+        batch_size = 64
+        n_epochs = 10
+        learning_rate = 3e-4
+
+    print(
+        f"Using device: {device}, batch_size: {batch_size}, n_epochs: {n_epochs}, lr: {learning_rate}"
+    )
 
     if resume:
         print(f"Loading existing model from {model_path} to resume training...")
@@ -49,11 +74,12 @@ def train(
                 model_path,
                 env=env,
                 tensorboard_log="./tensorboard/",
+                device=device,
                 # Standard MLP hyperparams
-                learning_rate=3e-4,
+                learning_rate=learning_rate,
                 n_steps=2048,
-                batch_size=64,
-                n_epochs=10,
+                batch_size=batch_size,
+                n_epochs=n_epochs,
                 gamma=0.99,
                 gae_lambda=0.95,
                 clip_range=0.2,
@@ -64,16 +90,17 @@ def train(
             resume = False
 
     else:
-        print("Initializing new PPO agent with MlpPolicy...")
+        print(f"Initializing new PPO agent with MlpPolicy on {device}...")
         model = PPO(
             "MlpPolicy",
             env,
             verbose=1,
             tensorboard_log="./tensorboard/",
-            learning_rate=3e-4,
+            device=device,
+            learning_rate=learning_rate,
             n_steps=2048,
-            batch_size=64,
-            n_epochs=10,
+            batch_size=batch_size,
+            n_epochs=n_epochs,
             gamma=0.99,
             gae_lambda=0.95,
             clip_range=0.2,
