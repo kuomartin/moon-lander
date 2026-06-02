@@ -48,7 +48,7 @@ def train(
             model = PPO.load(
                 model_path,
                 env=env,
-                tensorboard_log="./ppo_radar_tensorboard/",
+                tensorboard_log="./tensorboard/",
                 # Standard MLP hyperparams
                 learning_rate=3e-4,
                 n_steps=2048,
@@ -69,7 +69,7 @@ def train(
             "MlpPolicy",
             env,
             verbose=1,
-            tensorboard_log="./ppo_radar_tensorboard/",
+            tensorboard_log="./tensorboard/",
             learning_rate=3e-4,
             n_steps=2048,
             batch_size=64,
@@ -86,11 +86,12 @@ def train(
     checkpoint_callback = CheckpointCallback(
         save_freq=max(25_000 // 8, 1),
         save_path="./model_checkpoints/",
-        name_prefix="ppo_radar",
+        name_prefix=model_path,
     )
 
     model.learn(
         total_timesteps=timesteps,
+        tb_log_name=model_path,
         progress_bar=True,
         reset_num_timesteps=not resume,
         callback=checkpoint_callback,
