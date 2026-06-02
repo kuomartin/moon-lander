@@ -1,5 +1,4 @@
 __pycache__/
-.venv/
-*tensorboard/
-venv/
-model_checkpoints/
+/.venv/
+/tensorboard/
+/model_checkpoints/
