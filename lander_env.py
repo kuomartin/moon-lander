@@ -316,9 +316,15 @@ class RadarMoonLander(gym.Env):
         # Radar rays
         rays = []
         self.last_rays = []
-        # Cast rays in a circle around the lander
+        # Cast rays in a semi-circle (lower half) around the lander
         for i in range(self.num_rays):
-            angle = self.angle + (i * 2 * math.pi / self.num_rays)
+            # Start from right (pi/2) to left (3pi/2) to cover the lower half
+            # We use (self.num_rays - 1) to ensure the first and last rays are exactly horizontal if num_rays > 1
+            if self.num_rays > 1:
+                angle_offset = math.pi / 2 + i * (math.pi / (self.num_rays - 1))
+            else:
+                angle_offset = math.pi  # If only 1 ray, point it straight down
+            angle = self.angle + angle_offset
             dist, rtype = self._cast_ray(self.x, self.y, angle)
             self.last_rays.append((angle, dist, rtype))
             rays.append(dist / 100.0)  # Normalize distance
