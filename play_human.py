@@ -2,7 +2,7 @@ import gymnasium as gym
 import numpy as np
 import pygame
 
-from lander_env_v3 import RadarMoonLanderV3 as MoonLander
+from lander_env import RadarMoonLander as MoonLander
 
 
 def main():
@@ -11,7 +11,7 @@ def main():
     obs, info = env.reset()
 
     print("========================================")
-    print("      Welcome to Pixel Moon Lander!      ")
+    print("      Welcome to Radar Moon Lander!      ")
     print("========================================")
     print("Controls:")
     print("  W / UP Arrow    : Fire Main Engine")

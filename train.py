@@ -5,10 +5,10 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 
-# Register our V3 Radar environment
+# Register our Radar environment
 register(
-    id="RadarMoonLander-v3",
-    entry_point="lander_env_v3:RadarMoonLanderV3",
+    id="RadarMoonLander-v0",
+    entry_point="lander_env:RadarMoonLander",
 )
 
 
@@ -23,7 +23,7 @@ def train(
     angle_tolerance,
 ):
     print(
-        f"Creating V3 Radar environment (Seed: {seed}, Rays: {num_rays}, Pool: {map_pool_size})..."
+        f"Creating Radar environment (Seed: {seed}, Rays: {num_rays}, Pool: {map_pool_size})..."
     )
 
     env_kwargs = {
@@ -37,7 +37,7 @@ def train(
     }
 
     # MLP usually trains well with multiple environments
-    env = make_vec_env("RadarMoonLander-v3", n_envs=8, env_kwargs=env_kwargs)
+    env = make_vec_env("RadarMoonLander-v0", n_envs=8, env_kwargs=env_kwargs)
 
     if resume:
         print(f"Loading existing model from {model_path} to resume training...")
@@ -45,7 +45,7 @@ def train(
             model = PPO.load(
                 model_path,
                 env=env,
-                tensorboard_log="./ppo_radar_v3_tensorboard/",
+                tensorboard_log="./ppo_radar_tensorboard/",
                 # Standard MLP hyperparams
                 learning_rate=3e-4,
                 n_steps=2048,
@@ -61,12 +61,12 @@ def train(
             resume = False
 
     else:
-        print("Initializing new PPO agent with MlpPolicy for V3...")
+        print("Initializing new PPO agent with MlpPolicy...")
         model = PPO(
             "MlpPolicy",
             env,
             verbose=1,
-            tensorboard_log="./ppo_radar_v3_tensorboard/",
+            tensorboard_log="./ppo_radar_tensorboard/",
             learning_rate=3e-4,
             n_steps=2048,
             batch_size=64,
@@ -87,7 +87,7 @@ def train(
 
     # Evaluation
     print("Evaluating model...")
-    eval_env = make_vec_env("RadarMoonLander-v3", n_envs=1, env_kwargs=env_kwargs)
+    eval_env = make_vec_env("RadarMoonLander-v0", n_envs=1, env_kwargs=env_kwargs)
     mean_reward, std_reward = evaluate_policy(
         model, eval_env, n_eval_episodes=10, deterministic=True
     )
@@ -117,7 +117,7 @@ def test(
         "speed_tolerance": speed_tolerance,
         "angle_tolerance": angle_tolerance,
     }
-    env = make_vec_env("RadarMoonLander-v3", n_envs=1, env_kwargs=env_kwargs)
+    env = make_vec_env("RadarMoonLander-v0", n_envs=1, env_kwargs=env_kwargs)
 
     obs = env.reset()
     try:
@@ -134,12 +134,12 @@ def test(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Train or test Radar Moon Lander V3 (MLP)."
+        description="Train or test Radar Moon Lander (MLP)."
     )
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--timesteps", type=int, default=200_000)
-    parser.add_argument("--model-path", type=str, default="ppo_radar_moon_lander_v3")
+    parser.add_argument("--model-path", type=str, default="ppo_radar_moon_lander")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-rays", type=int, default=20)
     parser.add_argument("--map-pool-size", type=int, default=None)

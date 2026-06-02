@@ -21,7 +21,7 @@ _WIDTH = np.int64(WIDTH)
 _HEIGHT = np.int64(HEIGHT)
 
 
-class RadarMoonLanderV3(gym.Env):
+class RadarMoonLander(gym.Env):
     """
     A Moon Lander environment with radar-based observation space for MLP Reinforcement Learning.
 
