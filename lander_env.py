@@ -84,10 +84,20 @@ class RadarMoonLander(gym.Env):
         self.clock = None
         self.scale = 5
 
+        # --- Pre-computed constants for _get_obs() ---
+        if self.num_rays > 1:
+            self.angle_offsets = np.linspace(np.pi / 2, 3 * np.pi / 2, self.num_rays)
+        else:
+            self.angle_offsets = np.array([np.pi])
+
+        self.max_dist = 100.0
+        self.step_size = 1.0
+        self.steps = np.arange(
+            self.step_size, self.max_dist + self.step_size, self.step_size
+        )
+        self.dists_matrix = self.steps[None, :]
+
     def _generate_terrain(self):
-        self.terrain_x = [_ZERO]
-        # 增加初始高度的隨機範圍，使地形更多樣
-        self.terrain_y = [self.np_random.integers(40, 75)]
         self.pads = []
 
         # 固定不同數量平台時的分數分配，確保每場的得分機會更平均，不會有些場次太多高分
@@ -116,6 +126,10 @@ class RadarMoonLander(gym.Env):
                 break
         pad_centers.sort()
 
+        # 第一步：建立稀疏的地形控制點 (Control Points)
+        control_x = [_ZERO]
+        control_y = [self.np_random.integers(40, 75)]
+
         current_x = 0
         for i, cx in enumerate(pad_centers):
             mult = multipliers[i]
@@ -123,46 +137,108 @@ class RadarMoonLander(gym.Env):
             px1 = cx - pad_w // 2
             px2 = px1 + pad_w
 
-            # 生成平台之前的隨機地形
-            while current_x < px1 - 2:
-                # 較小的步長可以產生更細緻的地形細節
-                step_x = self.np_random.integers(2, 6)
-                current_x = min(current_x + step_x, px1)
-                if current_x == px1:
-                    break
-                # 增加垂直起伏的隨機性，擴大高度範圍
-                dy = self.np_random.integers(-12, 13)
-                current_y = np.clip(self.terrain_y[-1] + dy, 35, 80)
-                self.terrain_x.append(current_x)
-                self.terrain_y.append(current_y)
+            # 讓平台高度和前一個控制點不要落差過大，避免產生「垂直牆壁」
+            pad_y = np.clip(control_y[-1] + self.np_random.integers(-20, 21), 40, 75)
 
-            # 設定平台的高度（保持水平），增加垂直落差的驚喜感
-            pad_y = self.np_random.integers(40, 75)
-            self.terrain_x.append(px1)
-            self.terrain_y.append(pad_y)
-            self.terrain_x.append(px2)
-            self.terrain_y.append(pad_y)
+            # 生成到達平台之前的控制點
+            # 增大步長，為後續的平滑插值提供空間，產生柔和連綿的山丘
+            while current_x < px1 - 6:
+                step_x = self.np_random.integers(6, 14)
+                current_x = min(current_x + step_x, px1)
+                if current_x >= px1:
+                    break
+
+                # 基於前一個控制點加上隨機起伏
+                dy = self.np_random.integers(-15, 16)
+                cy = np.clip(control_y[-1] + dy, 30, 85)
+                control_x.append(current_x)
+                control_y.append(cy)
+
+            # 加入平台的兩個端點作為控制點（高度相同，確保平台完全水平）
+            control_x.append(px1)
+            control_y.append(pad_y)
+            control_x.append(px2)
+            control_y.append(pad_y)
 
             self.pads.append(
                 {"x1": px1, "x2": px2, "y": pad_y, "mult": mult, "width": pad_w}
             )
             current_x = px2
 
-        # 生成最後一段地形直到邊界
-        while current_x < WIDTH:
-            step_x = self.np_random.integers(2, 6)
-            current_x += step_x
-            if current_x > WIDTH:
-                current_x = _WIDTH
-            dy = self.np_random.integers(-12, 13)
-            current_y = np.clip(self.terrain_y[-1] + dy, 35, 80)
-            self.terrain_x.append(current_x)
-            self.terrain_y.append(current_y)
+        # 生成最後一段的控制點直到邊界
+        while current_x < WIDTH - 6:
+            step_x = self.np_random.integers(6, 14)
+            current_x = min(current_x + step_x, WIDTH)
+            if current_x >= WIDTH:
+                break
+            dy = self.np_random.integers(-15, 16)
+            cy = np.clip(control_y[-1] + dy, 30, 85)
+            control_x.append(current_x)
+            control_y.append(cy)
 
-        self.terrain_x[-1] = _WIDTH
-        self.terrain_heights = np.interp(
-            np.arange(_WIDTH), self.terrain_x, self.terrain_y
-        )
+        # 確保最後一個點剛好在邊界上
+        if control_x[-1] != _WIDTH:
+            control_x.append(_WIDTH)
+            control_y.append(
+                np.clip(control_y[-1] + self.np_random.integers(-15, 16), 30, 85)
+            )
+
+        # 第二步：使用餘弦插值 (Cosine Interpolation) 將控制點平滑化
+        # 這樣會產生與 1D Value Noise / Perlin Noise 視覺效果極度相似的平滑曲線
+        self.terrain_x = []
+        self.terrain_y = []
+
+        for i in range(len(control_x) - 1):
+            cx1, cx2 = control_x[i], control_x[i + 1]
+            cy1, cy2 = control_y[i], control_y[i + 1]
+
+            if cx1 == cx2:
+                continue
+
+            segment_len = cx2 - cx1
+            for j in range(segment_len):
+                mu = j / segment_len
+                # Cosine smoothing: 將線性進度轉化為 S 型平滑進度
+                mu2 = (1 - math.cos(mu * math.pi)) / 2
+                interp_y = cy1 * (1 - mu2) + cy2 * mu2
+
+                self.terrain_x.append(cx1 + j)
+                self.terrain_y.append(interp_y)
+
+        # 加上最後一個頂點
+        self.terrain_x.append(control_x[-1])
+        self.terrain_y.append(control_y[-1])
+
+        # 擷取 0~WIDTH 範圍的地形高度作為物理碰撞依據
+        self.terrain_heights = np.array(self.terrain_y[:_WIDTH])
+        if len(self.terrain_heights) < _WIDTH:
+            self.terrain_heights = np.pad(
+                self.terrain_heights, (0, _WIDTH - len(self.terrain_heights)), "edge"
+            )
+
+        # Pre-compute shaping arrays
+        if self.pads:
+            max_mult = max(p["mult"] for p in self.pads)
+            best_pads = [p for p in self.pads if p["mult"] == max_mult]
+            pads_x1 = np.array([p["x1"] for p in best_pads])
+            pads_x2 = np.array([p["x2"] for p in best_pads])
+            self._best_pads_target_x = (pads_x1 + pads_x2) / 2.0
+            self._best_pads_y = np.array([p["y"] for p in best_pads])
+            self._best_pads_mult = np.array([p["mult"] for p in best_pads])
+        else:
+            self._best_pads_target_x = np.array([])
+            self._best_pads_y = np.array([])
+            self._best_pads_mult = np.array([])
+
+        # Pre-compute pad maps for fast raycast lookup
+        self.pad_type_map = np.full(_WIDTH, -1.0)
+        self.pad_y_map = np.full(_WIDTH, -1.0)
+        for p in self.pads:
+            # clip to bounds just in case
+            x1 = max(0, int(p["x1"]))
+            x2 = min(_WIDTH - 1, int(p["x2"]))
+            self.pad_type_map[x1 : x2 + 1] = float(p["mult"])
+            self.pad_y_map[x1 : x2 + 1] = p["y"]
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -195,27 +271,15 @@ class RadarMoonLander(gym.Env):
         return self._get_obs(), {}
 
     def _calculate_shaping(self):
-        if not self.pads:
+        if not self.pads or len(self._best_pads_target_x) == 0:
             return 0.0
 
-        # Find the maximum multiplier among all pads
-        max_mult = max(p["mult"] for p in self.pads)
-
-        # Filter pads to only those with the maximum multiplier to strictly guide to the best pad
-        best_pads = [p for p in self.pads if p["mult"] == max_mult]
-
-        # Vectorized shaping calculation
-        pads_x1 = np.array([p["x1"] for p in best_pads])
-        pads_x2 = np.array([p["x2"] for p in best_pads])
-        pads_y = np.array([p["y"] for p in best_pads])
-        pads_mult = np.array([p["mult"] for p in best_pads])
-
-        target_x = (pads_x1 + pads_x2) / 2.0
-        dx = (self.x - target_x) / (WIDTH / 2.0)
-        dy = (self.y - pads_y) / HEIGHT
+        # Vectorized shaping calculation using pre-computed arrays
+        dx = (self.x - self._best_pads_target_x) / (WIDTH / 2.0)
+        dy = (self.y - self._best_pads_y) / HEIGHT
         dists = np.sqrt(dx**2 + dy**2)
 
-        shaping_vals = -50.0 * dists + (pads_mult - 1) * 10.0
+        shaping_vals = -50.0 * dists + (self._best_pads_mult - 1) * 10.0
         return float(np.max(shaping_vals))
 
     def _setup_pygame(self):
@@ -354,29 +418,16 @@ class RadarMoonLander(gym.Env):
         return self._get_obs(), reward, terminated, False, info
 
     def _get_obs(self):
-        # 1. Prepare all ray angles (Vectorized)
-        if self.num_rays > 1:
-            angle_offsets = np.linspace(np.pi / 2, 3 * np.pi / 2, self.num_rays)
-        else:
-            angle_offsets = np.array([np.pi])
-
-        angles = self.angle + angle_offsets
+        # 1. Prepare all ray angles using pre-computed offsets
+        angles = self.angle + self.angle_offsets
 
         # 2. Vectorized scanning for all distances
-        max_dist = 100.0
-        step_size = 1.0
-        # Sample points from step_size to max_dist
-        steps = np.arange(
-            step_size, max_dist + step_size, step_size
-        )  # [1, 2, ..., 100]
-
         # Create matrices: rays (N) x steps (M)
-        # angles[:, None] is (N, 1), steps[None, :] is (1, M)
-        dists_matrix = steps[None, :]
+        # angles[:, None] is (N, 1), dists_matrix is (1, M)
         angles_matrix = angles[:, None]
 
-        dx = dists_matrix * np.sin(angles_matrix)
-        dy = -dists_matrix * np.cos(angles_matrix)
+        dx = self.dists_matrix * np.sin(angles_matrix)
+        dy = -self.dists_matrix * np.cos(angles_matrix)
 
         sample_x = self.x + dx
         sample_y = self.y + dy
@@ -403,26 +454,24 @@ class RadarMoonLander(gym.Env):
         first_hit_idx = np.argmax(hits, axis=1)
 
         # 5. Determine final distances and types
-        final_dists = np.full(self.num_rays, max_dist, dtype=np.float32)
-        final_types = np.zeros(self.num_rays, dtype=np.float32)
+        final_dists = np.full(self.num_rays, self.max_dist, dtype=np.float32)
+        final_types = np.full(self.num_rays, -1.0, dtype=np.float32)
 
         self.last_rays = []
         for i in range(self.num_rays):
             if hit_any[i]:
                 idx = first_hit_idx[i]
-                dist = steps[idx]
-                hx, hy = sample_x[i, idx], sample_y[i, idx]
+                final_dists[i] = self.steps[idx]
 
-                # Identify hit type (Pad vs Terrain/Boundary)
-                rtype = -1.0  # Default: Terrain/Boundary
+                # Fast lookup for pad hit
                 if not out_of_bounds[i, idx]:
-                    for pad in self.pads:
-                        if pad["x1"] <= hx <= pad["x2"] and abs(hy - pad["y"]) < 2:
-                            rtype = float(pad["mult"])
-                            break
+                    hx_idx = safe_idx_x[i, idx]
+                    hy = sample_y[i, idx]
 
-                final_dists[i] = dist
-                final_types[i] = rtype
+                    # Check if the hit x-coordinate has a pad, and if the y-coordinate is close to it
+                    pad_type = self.pad_type_map[hx_idx]
+                    if pad_type > 0 and abs(hy - self.pad_y_map[hx_idx]) < 2:
+                        final_types[i] = pad_type
 
             # Store for rendering
             self.last_rays.append((angles[i], final_dists[i], final_types[i]))
@@ -431,46 +480,19 @@ class RadarMoonLander(gym.Env):
         normalized_dists = final_dists / 100.0
         normalized_types = np.where(final_types == -1.0, -1.0, final_types / 3.0)
 
-        # Interleave distances and types: [d1, t1, d2, t2, ...]
-        rays_obs = np.empty(self.num_rays * 2, dtype=np.float32)
-        rays_obs[0::2] = normalized_dists
-        rays_obs[1::2] = normalized_types
+        obs = np.empty(self.num_rays * 2 + 8, dtype=np.float32)
+        obs[0 : self.num_rays * 2 : 2] = normalized_dists
+        obs[1 : self.num_rays * 2 : 2] = normalized_types
+        obs[-8] = self.x / WIDTH
+        obs[-7] = self.y / HEIGHT
+        obs[-6] = self.vx / MAX_VELOCITY
+        obs[-5] = self.vy / MAX_VELOCITY
+        obs[-4] = self.v_angle / MAX_ANGLE_VELOCITY
+        obs[-3] = self.fuel / MAX_FUEL
+        obs[-2] = math.sin(self.angle)
+        obs[-1] = math.cos(self.angle)
 
-        other_states = [
-            self.x / WIDTH,
-            self.y / HEIGHT,
-            self.vx / MAX_VELOCITY,
-            self.vy / MAX_VELOCITY,
-            self.v_angle / MAX_ANGLE_VELOCITY,
-            self.fuel / MAX_FUEL,
-            math.sin(self.angle),
-            math.cos(self.angle),
-        ]
-
-        obs = np.concatenate([rays_obs, np.array(other_states, dtype=np.float32)])
         return obs
-
-    def _cast_ray(self, start_x, start_y, angle, max_dist=100):
-        step = 1.0
-        dist = 0
-        while dist < max_dist:
-            dist += step
-            rx = start_x + dist * math.sin(
-                angle
-            )  # Use sin for x, -cos for y based on how angle is defined in physics
-            ry = start_y - dist * math.cos(angle)
-
-            if rx < 0 or rx >= WIDTH or ry < 0 or ry >= HEIGHT:
-                return dist, -1  # Hit boundary
-
-            tx = int(rx)
-            if ry >= self.terrain_heights[tx]:
-                # Check if hit pad
-                for pad in self.pads:
-                    if pad["x1"] <= rx <= pad["x2"] and abs(ry - pad["y"]) < 2:
-                        return dist, pad["mult"]  # Hit pad (1, 2, 3)
-                return dist, -1  # Hit terrain
-        return max_dist, 0  # Hit nothing
 
     def _draw_lander(self, surface, x, y, angle, scale=1):
         s = scale
