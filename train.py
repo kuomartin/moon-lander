@@ -78,6 +78,7 @@ def train(
     speed_tolerance,
     angle_tolerance,
     render_fps,
+    learning_rate,
 ):
     print(
         f"Creating Radar environment (Seed: {seed}, Rays: {num_rays}, Pool: {map_pool_size})..."
@@ -111,7 +112,7 @@ def train(
     # 2. Fix training hyperparams (Use stable defaults that work on both)
     batch_size = 64
     n_epochs = 10
-    learning_rate = 3e-4
+    # learning_rate is now passed as an argument
 
     print(
         f"Consistency Mode: n_envs={n_envs}, n_steps={n_steps} (Total: {n_envs * n_steps}), batch_size={batch_size}"
@@ -161,9 +162,9 @@ def train(
 
     print(f"Starting training for {timesteps} timesteps...")
 
-    # 每訓練約 25,000 步 (除以 8 個並行環境) 就自動儲存一次 checkpoint
+    # 每訓練約 200,000 步就自動儲存一次 checkpoint
     checkpoint_callback = CheckpointCallback(
-        save_freq=max(25_600 // n_envs, 1),
+        save_freq=max(200_000, 1),
         save_path="./model_checkpoints/",
         name_prefix=model_path,
     )
@@ -274,6 +275,7 @@ if __name__ == "__main__":
     parser.add_argument("--map-pool-size", type=int, default=None)
     parser.add_argument("--speed-tolerance", type=float, default=0)
     parser.add_argument("--angle-tolerance", type=float, default=0)
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate for PPO")
     parser.add_argument(
         "--fps", type=int, default=30, help="Frames per second for rendering"
     )
@@ -300,4 +302,5 @@ if __name__ == "__main__":
             args.speed_tolerance,
             args.angle_tolerance,
             args.fps,
+            args.lr,
         )

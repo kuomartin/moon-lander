@@ -157,9 +157,8 @@ def train(
 
     print(f"Starting training for {timesteps} timesteps...")
 
-    # 每訓練約 25,000 步 (除以 8 個並行環境) 就自動儲存一次 checkpoint
     checkpoint_callback = CheckpointCallback(
-        save_freq=max(25_600 // n_envs, 1),
+        save_freq=max(200_000, 1),
         save_path="./model_checkpoints/",
         name_prefix=model_path,
     )

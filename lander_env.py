@@ -13,7 +13,7 @@ GRAVITY = 0.05
 THROTTLE = 0.15
 SIDE_ENGINE = 0.01
 MAX_FUEL = 200.0
-LANDING_SPEED = 1.0
+LANDING_SPEED = 0.3
 LANDING_ANGLE = 0.3
 
 _ZERO = np.int64(0)
@@ -198,11 +198,17 @@ class RadarMoonLander(gym.Env):
         if not self.pads:
             return 0.0
 
+        # Find the maximum multiplier among all pads
+        max_mult = max(p["mult"] for p in self.pads)
+
+        # Filter pads to only those with the maximum multiplier to strictly guide to the best pad
+        best_pads = [p for p in self.pads if p["mult"] == max_mult]
+
         # Vectorized shaping calculation
-        pads_x1 = np.array([p["x1"] for p in self.pads])
-        pads_x2 = np.array([p["x2"] for p in self.pads])
-        pads_y = np.array([p["y"] for p in self.pads])
-        pads_mult = np.array([p["mult"] for p in self.pads])
+        pads_x1 = np.array([p["x1"] for p in best_pads])
+        pads_x2 = np.array([p["x2"] for p in best_pads])
+        pads_y = np.array([p["y"] for p in best_pads])
+        pads_mult = np.array([p["mult"] for p in best_pads])
 
         target_x = (pads_x1 + pads_x2) / 2.0
         dx = (self.x - target_x) / (WIDTH / 2.0)
@@ -317,7 +323,7 @@ class RadarMoonLander(gym.Env):
 
                 if landed_on_pad is not None:
                     if abs(self.vy) < 1.0 and abs(self.angle) < 0.3:
-                        reward += 100 * landed_on_pad["mult"]
+                        reward += 30 * landed_on_pad["mult"] ** 2
                         outcome = landed_on_pad["mult"]
                     else:
                         reward += -100
