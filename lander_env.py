@@ -137,9 +137,6 @@ class RadarMoonLander(gym.Env):
             px1 = cx - pad_w // 2
             px2 = px1 + pad_w
 
-            # 讓平台高度和前一個控制點不要落差過大，避免產生「垂直牆壁」
-            pad_y = np.clip(control_y[-1] + self.np_random.integers(-20, 21), 40, 75)
-
             # 生成到達平台之前的控制點
             # 增大步長，為後續的平滑插值提供空間，產生柔和連綿的山丘
             while current_x < px1 - 6:
@@ -150,9 +147,13 @@ class RadarMoonLander(gym.Env):
 
                 # 基於前一個控制點加上隨機起伏
                 dy = self.np_random.integers(-15, 16)
-                cy = np.clip(control_y[-1] + dy, 30, 85)
+                cy = np.clip(control_y[-1] + dy, 30, 80)
                 control_x.append(current_x)
                 control_y.append(cy)
+
+            # 讓平台高度和前一個控制點不要落差過大，避免產生「垂直牆壁」
+            # 確保在填補間隔後才決定平台高度，使地形連接更平滑
+            pad_y = np.clip(control_y[-1] + self.np_random.integers(-20, 21), 40, 75)
 
             # 加入平台的兩個端點作為控制點（高度相同，確保平台完全水平）
             control_x.append(px1)
@@ -172,7 +173,7 @@ class RadarMoonLander(gym.Env):
             if current_x >= WIDTH:
                 break
             dy = self.np_random.integers(-15, 16)
-            cy = np.clip(control_y[-1] + dy, 30, 85)
+            cy = np.clip(control_y[-1] + dy, 30, 80)
             control_x.append(current_x)
             control_y.append(cy)
 
@@ -180,7 +181,7 @@ class RadarMoonLander(gym.Env):
         if control_x[-1] != _WIDTH:
             control_x.append(_WIDTH)
             control_y.append(
-                np.clip(control_y[-1] + self.np_random.integers(-15, 16), 30, 85)
+                np.clip(control_y[-1] + self.np_random.integers(-15, 16), 30, 80)
             )
 
         # 第二步：使用餘弦插值 (Cosine Interpolation) 將控制點平滑化
@@ -293,7 +294,7 @@ class RadarMoonLander(gym.Env):
                 )
                 pygame.display.set_caption("Radar Moon Lander V3")
             else:
-                self.screen = pygame.Surface((WIDTH, HEIGHT))
+                self.screen = pygame.Surface((WIDTH * self.scale, HEIGHT * self.scale))
         if self.clock is None:
             self.clock = pygame.time.Clock()
         if not hasattr(self, "font"):
@@ -533,71 +534,72 @@ class RadarMoonLander(gym.Env):
             return
         if self.screen is None:
             self._setup_pygame()
-        if self.render_mode == "human":
-            if self.screen is not None:
-                self.screen.fill((0, 0, 0))
-            scaled_terrain_poly = [
-                (tx * self.scale, ty * self.scale)
-                for tx, ty in zip(self.terrain_x, self.terrain_y)
-            ]
-            scaled_terrain_poly.append((_WIDTH * self.scale, _HEIGHT * self.scale))
-            scaled_terrain_poly.append((_ZERO, _HEIGHT * self.scale))
-            pygame.draw.polygon(self.screen, (100, 100, 100), scaled_terrain_poly)
-            for pad in self.pads:
-                color = (
-                    (0, 255, 0)
-                    if pad["mult"] == 3
-                    else (255, 255, 0)
-                    if pad["mult"] == 2
-                    else (255, 255, 255)
-                )
+        if self.screen is not None:
+            self.screen.fill((0, 0, 0))
+
+        scaled_terrain_poly = [
+            (tx * self.scale, ty * self.scale)
+            for tx, ty in zip(self.terrain_x, self.terrain_y)
+        ]
+        scaled_terrain_poly.append((_WIDTH * self.scale, _HEIGHT * self.scale))
+        scaled_terrain_poly.append((_ZERO, _HEIGHT * self.scale))
+        pygame.draw.polygon(self.screen, (100, 100, 100), scaled_terrain_poly)
+        for pad in self.pads:
+            color = (
+                (0, 255, 0)
+                if pad["mult"] == 3
+                else (255, 255, 0)
+                if pad["mult"] == 2
+                else (255, 255, 255)
+            )
+            pygame.draw.line(
+                self.screen,
+                color,
+                (pad["x1"] * self.scale, pad["y"] * self.scale),
+                (pad["x2"] * self.scale, pad["y"] * self.scale),
+                int(max(3, self.scale)),
+            )
+
+        if hasattr(self, "last_rays"):
+            for angle, dist, rtype in self.last_rays:
+                end_x = self.x + dist * math.sin(angle)
+                end_y = self.y - dist * math.cos(angle)
+                if rtype == 0:
+                    color = (50, 50, 50)  # Empty
+                elif rtype == -1:
+                    color = (150, 50, 50)  # Terrain / Boundary (darker red)
+                elif rtype == 1:
+                    color = (255, 255, 255)  # Pad x1
+                elif rtype == 2:
+                    color = (255, 255, 0)  # Pad x2
+                elif rtype == 3:
+                    color = (0, 255, 0)  # Pad x3
+                else:
+                    color = (255, 255, 255)
+
                 pygame.draw.line(
                     self.screen,
                     color,
-                    (pad["x1"] * self.scale, pad["y"] * self.scale),
-                    (pad["x2"] * self.scale, pad["y"] * self.scale),
-                    int(max(3, self.scale)),
+                    (float(self.x * self.scale), float(self.y * self.scale)),
+                    (float(end_x * self.scale), float(end_y * self.scale)),
+                    1,
                 )
 
-            if hasattr(self, "last_rays"):
-                for angle, dist, rtype in self.last_rays:
-                    end_x = self.x + dist * math.sin(angle)
-                    end_y = self.y - dist * math.cos(angle)
-                    if rtype == 0:
-                        color = (50, 50, 50)  # Empty
-                    elif rtype == -1:
-                        color = (150, 50, 50)  # Terrain / Boundary (darker red)
-                    elif rtype == 1:
-                        color = (255, 255, 255)  # Pad x1
-                    elif rtype == 2:
-                        color = (255, 255, 0)  # Pad x2
-                    elif rtype == 3:
-                        color = (0, 255, 0)  # Pad x3
-                    else:
-                        color = (255, 255, 255)
+        self._draw_lander(
+            self.screen,
+            self.x * self.scale,
+            self.y * self.scale,
+            self.angle,
+            scale=self.scale,
+        )
 
-                    pygame.draw.line(
-                        self.screen,
-                        color,
-                        (float(self.x * self.scale), float(self.y * self.scale)),
-                        (float(end_x * self.scale), float(end_y * self.scale)),
-                        1,
-                    )
+        # Draw fuel
+        fuel_text = self.font.render(
+            f"Fuel: {int(self.fuel)} / {int(MAX_FUEL)}", True, (255, 255, 255)
+        )
+        self.screen.blit(fuel_text, (10, 10))
 
-            self._draw_lander(
-                self.screen,
-                self.x * self.scale,
-                self.y * self.scale,
-                self.angle,
-                scale=self.scale,
-            )
-
-            # Draw fuel
-            fuel_text = self.font.render(
-                f"Fuel: {int(self.fuel)} / {int(MAX_FUEL)}", True, (255, 255, 255)
-            )
-            self.screen.blit(fuel_text, (10, 10))
-
+        if self.render_mode == "human":
             pygame.display.flip()
             self.clock.tick(self.metadata["render_fps"])
 
